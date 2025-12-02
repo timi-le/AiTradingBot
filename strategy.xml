@@ -1,14 +1,32 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <GeminiPropChallengeAssistant>
   <Meta>
-    <Version>5.1-PriceAction</Version>
-    <Objective>Pass Prop Challenge using Structure and Price Action.</Objective>
+    <Version>5.3-GoldOptimized</Version>
+    <Objective>Pass Prop Challenge using AI-Driven Liquidity Analysis and Price Action.</Objective>
     <Pairs>GBPUSD, XAUUSD</Pairs>
     <Constraints>
       <MaxDailyDrawdownPct>3.8</MaxDailyDrawdownPct>
       <TradingSessions>London, NewYork</TradingSessions>
     </Constraints>
   </Meta>
+
+  <AI_Reasoning_Instructions>
+    <!-- Instructions for interpreting Python's forensic data -->
+    <FakeoutDetection>
+      <BearishTrap>
+        IF price pierced 'recent_swing_high' (> 0 pips)
+        AND 'failed_to_close_above_high' is TRUE
+        AND 'upper_wick_strength' > 0.5
+        THEN -> High Probability Sell (Liquidity Sweep).
+      </BearishTrap>
+      <BullishTrap>
+        IF price pierced 'recent_swing_low' (> 0 pips)
+        AND 'failed_to_close_below_low' is TRUE
+        AND 'lower_wick_strength' > 0.5
+        THEN -> High Probability Buy (Liquidity Sweep).
+      </BullishTrap>
+    </FakeoutDetection>
+  </AI_Reasoning_Instructions>
 
   <MarketRegimes>
     <Regime type="TRENDING">
@@ -22,8 +40,13 @@
   </MarketRegimes>
 
   <EntryRules>
+    <!-- NEW: Commodity-Specific Spread Rules -->
+    <SpreadLimit>
+      <Normal>2.5</Normal> 
+      <Gold_XAU>4.5</Gold_XAU> <!-- Special Allowance for XAUUSD/GOLD volatility -->
+    </SpreadLimit>
+
     <PriceAction>
-      <!-- KEY: High probability candlestick patterns -->
       <Pattern name="Pinbar">Wick is 2/3rds of total candle length (Rejection)</Pattern>
       <Pattern name="Engulfing">Body completely covers previous candle (Momentum)</Pattern>
       <Pattern name="InsideBarBreak">Breakout from low volatility compression</Pattern>
