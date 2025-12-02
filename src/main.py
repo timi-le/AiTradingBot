@@ -54,7 +54,6 @@ class TradingBot:
 
     def is_trading_hours(self):
         current_hour = datetime.now(timezone.utc).hour
-        # 08:00 to 22:00 UTC (London -> NY Close)
         if 8 <= current_hour < 22:
             return True
         return False
@@ -99,47 +98,55 @@ class TradingBot:
         for symbol in settings.symbol_list:
             logger.info(f"Scanning {symbol}...")
             
-            data = self.broker.get_multi_timeframe_data(symbol)
-            if not data: continue
-            
-            live = self.broker.get_live_metrics(symbol)
-            spread = live.get('spread_pips', 100)
-            
-            # --- UPDATED SPREAD LOGIC FOR GOLD ---
-            max_spread = 4.5 if "XAU" in symbol or "GOLD" in symbol else 2.5
-            
-            if spread > max_spread:
-                logger.info(f"Skipping {symbol}: Spread {spread} > Limit {max_spread}")
-                continue
-            # -------------------------------------
+            # --- 429 ERROR HANDLING LOOP ---
+            try:
+                data = self.broker.get_multi_timeframe_data(symbol)
+                if not data: continue
+                
+                live = self.broker.get_live_metrics(symbol)
+                spread = live.get('spread_pips', 100)
+                
+                max_spread = 4.5 if "XAU" in symbol or "GOLD" in symbol else 2.5
+                if spread > max_spread:
+                    logger.info(f"Skipping {symbol}: Spread {spread} > Limit")
+                    continue
 
-            market_metrics = self.analyzer.calculate_regime_metrics(data, live)
-            acct = self.broker.get_account_info()
-            acct['open_trades'] = len(self.broker.get_open_positions(symbol))
-            
-            mem = self.memory.get(symbol, {})
-            decision = self.brain.analyze_market(market_metrics, acct, previous_context=mem)
-            self.memory[symbol] = {"plan": decision.get('plan'), "reasoning": decision.get('reasoning')}
-            
-            if decision['action'] in ["BUY", "SELL"]:
-                msg = f"🚀 **{symbol} CALL**\nAction: {decision['action']}\nReason: {decision.get('reasoning')}"
-                self.notifier.send(msg)
-                self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], decision['risk_percentage'])
-            else:
-                logger.info(f"{symbol} HOLD: {decision.get('reasoning')}")
+                market_metrics = self.analyzer.calculate_regime_metrics(data, live)
+                acct = self.broker.get_account_info()
+                acct['open_trades'] = len(self.broker.get_open_positions(symbol))
+                
+                mem = self.memory.get(symbol, {})
+                decision = self.brain.analyze_market(market_metrics, acct, previous_context=mem)
+                self.memory[symbol] = {"plan": decision.get('plan'), "reasoning": decision.get('reasoning')}
+                
+                if decision['action'] in ["BUY", "SELL"]:
+                    msg = f"🚀 **{symbol} CALL**\nAction: {decision['action']}\nReason: {decision.get('reasoning')}"
+                    self.notifier.send(msg)
+                    self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], decision['risk_percentage'])
+                else:
+                    logger.info(f"{symbol} HOLD: {decision.get('reasoning')}")
+
+            except Exception as e:
+                if "429" in str(e):
+                    logger.warning("⚠️ API Quota Hit. Cooling down for 60s...")
+                    time.sleep(60) # Wait for quota reset
+                else:
+                    logger.error(f"Analysis Error: {e}")
 
     def start(self):
         if not self.broker.connect():
             self.notifier.send("🚨 Broker Connect Fail")
             sys.exit(1)
         
-        self.notifier.send(f"✅ **QuantBot V5 Live**\nTracking: {settings.SYMBOLS}")
+        self.notifier.send(f"✅ **QuantBot V5 Live**\nCycle: 15 Mins\nPairs: {settings.SYMBOLS}")
         self.listener.start()
         
         while self.running:
             try:
                 self.run_cycle()
-                time.sleep(300)
+                # FIX: Increased sleep to 900s (15 mins) to stay within Free Tier limits
+                logger.info("Sleeping for 15 minutes...")
+                time.sleep(900) 
             except Exception as e:
                 logger.error(f"Loop Error: {e}")
                 time.sleep(60)
