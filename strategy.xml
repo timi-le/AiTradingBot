@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<GeminiPropChallengeAssistant>
+  <Meta>
+    <Version>5.1-PriceAction</Version>
+    <Objective>Pass Prop Challenge using Structure and Price Action.</Objective>
+    <Pairs>GBPUSD, XAUUSD</Pairs>
+    <Constraints>
+      <MaxDailyDrawdownPct>3.8</MaxDailyDrawdownPct>
+      <TradingSessions>London, NewYork</TradingSessions>
+    </Constraints>
+  </Meta>
+
+  <MarketRegimes>
+    <Regime type="TRENDING">
+      <Condition>ADX > 25 AND EMA_Alignment == True</Condition>
+      <Strategy>BreakoutRetest, TrendScalp</Strategy>
+    </Regime>
+    <Regime type="RANGING">
+      <Condition>ADX &lt; 20 AND Price_Inside_Donchian == True</Condition>
+      <Strategy>FadeSupportResistance</Strategy>
+    </Regime>
+  </MarketRegimes>
+
+  <EntryRules>
+    <PriceAction>
+      <!-- KEY: High probability candlestick patterns -->
+      <Pattern name="Pinbar">Wick is 2/3rds of total candle length (Rejection)</Pattern>
+      <Pattern name="Engulfing">Body completely covers previous candle (Momentum)</Pattern>
+      <Pattern name="InsideBarBreak">Breakout from low volatility compression</Pattern>
+    </PriceAction>
+
+    <ScalpSetup>
+      <!-- M15 Execution for quick moves -->
+      <Buy>Trend is UP + Price bounces off EMA50 + Bullish Pinbar/Engulfing</Buy>
+      <Sell>Trend is DOWN + Price rejects EMA50 + Bearish Pinbar/Engulfing</Sell>
+    </ScalpSetup>
+
+    <BreakoutSetup>
+      <!-- Structural Breaks -->
+      <Buy>Price closes above recent Swing High + Retest + Bullish PA</Buy>
+      <Sell>Price closes below recent Swing Low + Retest + Bearish PA</Sell>
+    </BreakoutSetup>
+  </EntryRules>
+
+  <RiskManagement>
+    <BaseRiskPerTrade>0.5%</BaseRiskPerTrade>
+    <StopLoss>
+      <Scalp>Below Signal Candle Low</Scalp>
+      <Swing>Below recent Swing Low Structure</Swing>
+    </StopLoss>
+  </RiskManagement>
+</GeminiPropChallengeAssistant>
