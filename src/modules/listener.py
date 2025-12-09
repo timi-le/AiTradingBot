@@ -8,6 +8,8 @@ from src.config.settings import settings
 logger = logging.getLogger(__name__)
 
 class TelegramListener:
+    START_HEADER = "Xgate Control Center 🚀"  # Only emoji allowed here
+
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.token = settings.TELEGRAM_BOT_TOKEN.get_secret_value()
@@ -22,83 +24,105 @@ class TelegramListener:
         thread.start()
 
     def _poll_updates(self):
-        logger.info("Telegram Control Center Active...")
+        logger.info("Xgate Listener Activated.")
         url = f"https://api.telegram.org/bot{self.token}/getUpdates"
         
         while self.running:
             try:
                 resp = self.session.get(url, params={"offset": self.offset, "timeout": 30}, timeout=35)
                 data = resp.json()
+                
                 if data.get("ok"):
                     for u in data["result"]:
                         self.offset = u["update_id"] + 1
                         self._handle_message(u.get("message", {}))
+                        
                 time.sleep(0.5)
-            except:
+            except Exception as e:
+                logger.warning(f"Telegram Listener Error: {e}")
                 time.sleep(5)
+
+    def _send(self, text):
+        self.bot.notifier.send(text)
 
     def _handle_message(self, message):
         text = message.get("text", "").lower().strip()
         chat_id = str(message.get("chat", {}).get("id"))
-        if chat_id != settings.TELEGRAM_CHAT_ID: return
+        if chat_id != settings.TELEGRAM_CHAT_ID:
+            return
 
-        if text == "/start" or text == "/help":
-            msg = (
-                "🕹️ **QUANTBOT V5 COMMANDER**\n\n"
-                "📊 **Info**\n"
-                "/status - Health & Market Hours\n"
-                "/balance - Equity & Margin\n"
-                "/positions - Open Trades\n"
-                "/regime - Current AI Market View\n\n"
-                "⚙️ **Control**\n"
-                "/test - 🧪 Test Broker Execution\n"
-                "/pause - Suspend Entries\n"
-                "/resume - Resume Entries\n"
-                "/analyze - Force Scan\n"
-                "/logs - View System Logs"
+        # -------------------------
+        # COMMAND ROUTER
+        # -------------------------
+
+        if text in ("/start", "/help"):
+            self._send(
+                f"*{self.START_HEADER}*\n\n"
+                "Available Commands:\n"
+                "\n*System Information*"
+                "\n/status - Bot health status"
+                "\n/balance - Account balance and equity"
+                "\n/positions - Open positions"
+                "\n/regime - Current market regime analysis"
+                "\n"
+                "\n*Controls*"
+                "\n/test - Broker execution test"
+                "\n/pause - Pause trade entries"
+                "\n/resume - Resume trade entries"
+                "\n/analyze - Force immediate scan"
+                "\n/logs - Retrieve recent log entries"
             )
-            self.bot.notifier.send(msg)
 
         elif text == "/test":
-            self.bot.notifier.send("🧪 **Running Execution Test...**\nAttempting to place and delete a pending order.")
-            # We use the first symbol in the list for the test
-            test_symbol = settings.symbol_list[0]
-            success = self.bot.broker.verify_execution_capability(test_symbol)
-            if success:
-                self.bot.notifier.send("✅ **TEST PASSED**\nBroker accepted trade.\nBot has permissions.")
-            else:
-                self.bot.notifier.send("❌ **TEST FAILED**\nCheck logs. Is 'Algo Trading' Green?")
+            self._send("Running execution validation...")
+            symbol = settings.symbol_list[0]
+            ok = self.bot.broker.verify_execution_capability(symbol)
+            self._send("Execution Test Passed." if ok else "Execution Test Failed. Check MT5 permissions.")
 
         elif text == "/status":
-            hour = datetime.datetime.now(datetime.timezone.utc).hour
-            session_status = "🟢 OPEN (London/NY)" if 8 <= hour < 22 else "💤 CLOSED (Asian)"
-            state = "▶️ RUNNING" if not self.bot.paused else "⏸️ PAUSED"
-            self.bot.notifier.send(f"✅ **System Status**\nState: {state}\nMarket Window: {session_status}\nMonitoring: {settings.SYMBOLS}")
+            now = datetime.datetime.now(datetime.timezone.utc).hour
+            active = "Market Active" if 8 <= now < 22 else "Market Inactive"
+
+            state = "Running" if not self.bot.paused else "Paused"
+
+            self._send(
+                f"*System Status*\n"
+                f"State: {state}\n"
+                f"Market Window: {active}\n"
+                f"Symbols Monitored: {settings.SYMBOLS}"
+            )
 
         elif text == "/balance":
             i = self.bot.broker.get_account_info()
-            self.bot.notifier.send(f"💰 **Capital**\nEquity: ${i.get('equity',0):.2f}\nBalance: ${i.get('balance',0):.2f}")
+            self._send(
+                f"*Account Information*\n"
+                f"Equity: {i.get('equity',0):.2f}\n"
+                f"Balance: {i.get('balance',0):.2f}"
+            )
 
         elif text == "/regime":
-            if not self.bot.memory:
-                self.bot.notifier.send("🧠 No memory yet. Wait for next cycle.")
-            else:
-                msg = " **AI Market Memory**\n"
-                for sym, data in self.bot.memory.items():
-                    msg += f"\n**{sym}**\nPlan: {data.get('plan')}\n"
-                self.bot.notifier.send(msg)
+            mem = self.bot.memory or {}
+            if not mem:
+                self._send("No market memory available yet.")
+                return
+            
+            msg = "*Market Regime Analysis*\n"
+            for sym, d in mem.items():
+                msg += f"\n{sym}\nPlan: {d.get('plan')}\n"
+            self._send(msg)
 
         elif text == "/logs":
-            self.bot.notifier.send(f"📜 **Logs**\n```\n{self.bot.get_recent_logs()}\n```")
+            logs = self.bot.get_recent_logs()
+            self._send(f"*System Logs*\n```\n{logs}\n```")
 
         elif text == "/pause":
             self.bot.paused = True
-            self.bot.notifier.send("⏸️ Bot Paused.")
+            self._send("System paused.")
 
         elif text == "/resume":
             self.bot.paused = False
-            self.bot.notifier.send("▶️ Bot Resumed.")
-            
+            self._send("System resumed.")
+
         elif text == "/analyze":
-            self.bot.notifier.send("🔍 Scanning...")
+            self._send("Executing immediate scan request.")
             threading.Thread(target=self.bot.run_cycle).start()

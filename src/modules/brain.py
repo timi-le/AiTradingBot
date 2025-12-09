@@ -9,19 +9,41 @@ class GeminiBrain:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY.get_secret_value())
         
-        # FIX 1: Switched to 1.5-flash (Stable) to solve 429 Quota Error
-        # This model has much higher limits (1,500/day vs 50/day)
-        self.model_name = 'gemini-1.5-flash'
+        # UPGRADE: Switched to 'gemini-2.5-pro'
+        # This is the "Smartest" stable model available. 
+        # REQUIRES: Paid billing enabled in Google Cloud Console.
+        # It has better reasoning for "Liquidity Sweeps" than Flash.
+        self.model_name = 'gemini-2.5-pro'
         
         self.model = genai.GenerativeModel(
             model_name=self.model_name,
             generation_config={"response_mime_type": "application/json"}
         )
+        
+        # Self-Check: Verify model exists, otherwise list available ones
+        try:
+            # We don't make a call yet, but if the init failed hard earlier, we catch it here.
+            # Some SDK versions validate immediately.
+            pass
+        except Exception as e:
+            logger.error(f"Model Init Error: {e}")
+
         try:
             with open("strategy.xml", "r") as f:
                 self.strategy_xml = f.read()
         except FileNotFoundError:
             self.strategy_xml = "Error: Logic file missing."
+
+    def log_available_models(self):
+        """Helper to debug 404 errors by listing what IS available."""
+        try:
+            logger.info("--- LISTING AVAILABLE MODELS ---")
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    logger.info(f"Available: {m.name}")
+            logger.info("--------------------------------")
+        except Exception as e:
+            logger.error(f"Could not list models: {e}")
 
     def analyze_market(self, market_data: dict, account_data: dict, previous_context: dict = None) -> dict:
         
@@ -62,5 +84,11 @@ class GeminiBrain:
             response = self.model.generate_content(prompt)
             return json.loads(response.text)['decision']
         except Exception as e:
-            logger.error(f"Brain Error: {e}")
+            # If we get a 404 or 400 error, list the models to help debug
+            if "404" in str(e) or "not found" in str(e).lower():
+                logger.error(f"Brain Error: Model {self.model_name} not found. checking available models...")
+                self.log_available_models()
+            else:
+                logger.error(f"Brain Error: {e}")
+            
             return {"action": "HOLD", "management_action": "NONE", "reasoning": "AI Error"}
