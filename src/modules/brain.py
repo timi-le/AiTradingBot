@@ -9,14 +9,14 @@ class GeminiBrain:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY.get_secret_value())
         
-        # Use the specific version that works for you
-        self.model_name = 'gemini-2.5-flash'
+        # FIX 1: Switched to 1.5-flash (Stable) to solve 429 Quota Error
+        # This model has much higher limits (1,500/day vs 50/day)
+        self.model_name = 'gemini-1.5-flash'
         
         self.model = genai.GenerativeModel(
             model_name=self.model_name,
             generation_config={"response_mime_type": "application/json"}
         )
-        
         try:
             with open("strategy.xml", "r") as f:
                 self.strategy_xml = f.read()
@@ -25,48 +25,36 @@ class GeminiBrain:
 
     def analyze_market(self, market_data: dict, account_data: dict, previous_context: dict = None) -> dict:
         
-        # Memory Injection
-        memory_section = "No previous active plan."
-        if previous_context:
-            memory_section = f"""
-            ## YOUR PREVIOUS MEMORY (5 Mins Ago):
-            - Last Action: {previous_context.get('action')}
-            - Your Plan: {previous_context.get('plan')}
-            - Your Reasoning: {previous_context.get('reasoning')}
-            
-            INSTRUCTION: If your 'Plan' was to wait for a specific trigger, check the 'liquidity_forensics' below to see if it happened.
-            """
-
+        open_trades_context = account_data.get('open_trades_details', [])
+        
         prompt = f"""
         Act as the 'GeminiPropChallengeAssistant'.
-        Your Goal: Pass the Prop Firm Challenge by strictly following the XML Rules.
-
+        
         --- XML CONSTITUTION ---
         {self.strategy_xml}
-
-        {memory_section}
 
         ## CURRENT MARKET EVIDENCE (JSON):
         {json.dumps(market_data, indent=2)}
         
-        ## ACCOUNT STATUS:
+        ## ACCOUNT & TRADES:
         {json.dumps(account_data, indent=2)}
+        "Open Trades Details": {json.dumps(open_trades_context, default=str)}
 
-        ## CRITICAL INSTRUCTIONS:
-        1. **Look at 'liquidity_forensics'**: Did price pierce a level and reject? (Wick > 0.5)? If yes, this is a SWEEP.
-        2. **Look at 'market_context'**: Is the Regime TRENDING or RANGING?
-        3. **Look at 'live_data'**: Is spread high?
-        4. **Risk Check**: Do not exceed MaxOpenRiskPct defined in XML.
+        ## CRITICAL DIRECTION RULE:
+        - If 'daily_bias' is BULLISH, you may ONLY 'BUY' or 'HOLD'. DO NOT SELL.
+        - If 'daily_bias' is BEARISH, you may ONLY 'SELL' or 'HOLD'. DO NOT BUY.
+        - IGNORE Overbought/Oversold indicators if they conflict with the Daily Bias. Trend is King.
 
         ## OUTPUT DECISION (JSON):
         {{
             "decision": {{
                 "action": "BUY" | "SELL" | "HOLD",
+                "management_action": "NONE" | "CLOSE_ALL_XAUUSD" | "CLOSE_ALL_GBPUSD",
                 "risk_percentage": 0.0,
                 "stop_loss": 0.0,
                 "take_profit": 0.0,
-                "plan": "What are you waiting for next?",
-                "reasoning": "Explain using the forensic data (e.g. 'Bearish Sweep detected at H4 resistance')"
+                "plan": "Short plan",
+                "reasoning": "Reasoning"
             }}
         }}
         """
@@ -75,4 +63,4 @@ class GeminiBrain:
             return json.loads(response.text)['decision']
         except Exception as e:
             logger.error(f"Brain Error: {e}")
-            return {"action": "HOLD", "reasoning": "AI Error"}
+            return {"action": "HOLD", "management_action": "NONE", "reasoning": "AI Error"}

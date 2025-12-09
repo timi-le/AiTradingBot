@@ -13,7 +13,6 @@ from src.modules.notifier import TelegramNotifier
 from src.modules.listener import TelegramListener
 import MetaTrader5 as mt5
 
-# Logging Setup
 log_buffer = collections.deque(maxlen=50)
 class ListHandler(logging.Handler):
     def __init__(self, log_buffer):
@@ -41,21 +40,13 @@ class TradingBot:
         self.cycles_run = 0
         self.error_count = 0
 
-    def get_recent_logs(self, n=15):
-        return "\n".join(list(log_buffer)[-n:])
-
-    def get_performance_metrics(self):
-        return {
-            "start_time": self.start_time,
-            "cycles": self.cycles_run,
-            "errors": self.error_count,
-            "trades_managed": len(self.broker.get_open_positions()) if self.broker.connected else 0
-        }
+    def get_recent_logs(self, n=15): return "\n".join(list(log_buffer)[-n:])
+    def get_performance_metrics(self): return {"uptime": int(time.time()-self.start_time), "cycles": self.cycles_run}
 
     def is_trading_hours(self):
         current_hour = datetime.now(timezone.utc).hour
-        if 8 <= current_hour < 22:
-            return True
+        # 07:00 UTC to 22:00 UTC
+        if 7 <= current_hour < 22: return True
         return False
 
     def manage_positions(self):
@@ -73,8 +64,7 @@ class TradingBot:
                 is_at_be = (trade.sl >= entry) if trade.type == 0 else (trade.sl <= entry)
                 if r >= 1.2 and not is_at_be:
                      self.broker.modify_position(ticket, sl=entry, tp=trade.tp)
-                     self.notifier.send(f"🛡️ {symbol} -> Breakeven")
-
+                     self.notifier.send(f"🛡️ {symbol} -> Breakeven (R={r:.2f})")
                 if r >= 1.0 and "Partial" not in trade.comment:
                     vol = round(trade.volume * 0.4, 2)
                     if vol >= 0.01:
@@ -87,7 +77,6 @@ class TradingBot:
             self.manage_positions()
         except Exception as e:
             logger.error(f"Manager Error: {e}")
-            self.error_count += 1
 
         if not self.is_trading_hours():
             logger.info("💤 Asian Session - Monitoring Only")
@@ -97,39 +86,45 @@ class TradingBot:
 
         for symbol in settings.symbol_list:
             logger.info(f"Scanning {symbol}...")
-            
-            # --- 429 ERROR HANDLING LOOP ---
             try:
                 data = self.broker.get_multi_timeframe_data(symbol)
                 if not data: continue
                 
                 live = self.broker.get_live_metrics(symbol)
-                spread = live.get('spread_pips', 100)
                 
+                # Check Spread
+                spread = live.get('spread_pips', 100)
                 max_spread = 4.5 if "XAU" in symbol or "GOLD" in symbol else 2.5
                 if spread > max_spread:
-                    logger.info(f"Skipping {symbol}: Spread {spread} > Limit")
+                    logger.info(f"Skipping {symbol}: Spread {spread} > {max_spread}")
                     continue
 
-                market_metrics = self.analyzer.calculate_regime_metrics(data, live)
+                # Pass Symbol to Analyzer for Volatility Scaling
+                market_metrics = self.analyzer.calculate_regime_metrics(data, symbol)
+                
                 acct = self.broker.get_account_info()
-                acct['open_trades'] = len(self.broker.get_open_positions(symbol))
+                raw_trades = self.broker.get_open_positions(symbol)
+                acct['open_trades_details'] = [{"ticket": t.ticket, "profit": t.profit, "type": t.type} for t in raw_trades]
+                acct['open_trades_count'] = len(raw_trades)
                 
                 mem = self.memory.get(symbol, {})
                 decision = self.brain.analyze_market(market_metrics, acct, previous_context=mem)
                 self.memory[symbol] = {"plan": decision.get('plan'), "reasoning": decision.get('reasoning')}
                 
                 if decision['action'] in ["BUY", "SELL"]:
-                    msg = f"🚀 **{symbol} CALL**\nAction: {decision['action']}\nReason: {decision.get('reasoning')}"
+                    # Use the DYNAMIC risk percentage calculated by Math Engine
+                    recommended_risk = market_metrics['risk_data']['dynamic_risk_pct']
+                    
+                    msg = f"🚀 **{symbol} CALL**\nAction: {decision['action']}\nRisk: {recommended_risk}% (Vol-Scaled)\nReason: {decision.get('reasoning')}"
                     self.notifier.send(msg)
-                    self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], decision['risk_percentage'])
+                    self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], recommended_risk)
                 else:
                     logger.info(f"{symbol} HOLD: {decision.get('reasoning')}")
 
             except Exception as e:
                 if "429" in str(e):
-                    logger.warning("⚠️ API Quota Hit. Cooling down for 60s...")
-                    time.sleep(60) # Wait for quota reset
+                    logger.warning("⚠️ API Quota. Cooling 60s...")
+                    time.sleep(60)
                 else:
                     logger.error(f"Analysis Error: {e}")
 
@@ -137,14 +132,12 @@ class TradingBot:
         if not self.broker.connect():
             self.notifier.send("🚨 Broker Connect Fail")
             sys.exit(1)
-        
-        self.notifier.send(f"✅ **QuantBot V5 Live**\nCycle: 15 Mins\nPairs: {settings.SYMBOLS}")
+        self.notifier.send(f"✅ **QuantBot V6.0 Live**\nVol-Scaled Risk Active")
         self.listener.start()
         
         while self.running:
             try:
                 self.run_cycle()
-                # FIX: Increased sleep to 900s (15 mins) to stay within Free Tier limits
                 logger.info("Sleeping for 15 minutes...")
                 time.sleep(900) 
             except Exception as e:
