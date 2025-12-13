@@ -2,28 +2,16 @@ import time
 import signal
 import sys
 import logging
-import threading
-import collections
-from datetime import datetime, timezone
+import json
 from src.config.settings import settings
 from src.modules.broker import MT5Broker
 from src.modules.brain import GeminiBrain
-from src.modules.market_data import MarketAnalyzer
+from src.modules.market_data import AlphaModel
+from src.modules.session_manager import SessionManager
 from src.modules.notifier import TelegramNotifier
 from src.modules.listener import TelegramListener
-import MetaTrader5 as mt5
 
-log_buffer = collections.deque(maxlen=50)
-class ListHandler(logging.Handler):
-    def __init__(self, log_buffer):
-        super().__init__()
-        self.log_buffer = log_buffer
-    def emit(self, record):
-        self.log_buffer.append(self.format(record))
-
-handler = ListHandler(log_buffer)
-handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout), handler])
+logging.basicConfig(level=settings.LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger(__name__)
 
 class TradingBot:
@@ -32,124 +20,85 @@ class TradingBot:
         self.paused = False
         self.broker = MT5Broker()
         self.brain = GeminiBrain()
-        self.analyzer = MarketAnalyzer()
+        self.alpha = AlphaModel() 
+        self.session = SessionManager() 
         self.notifier = TelegramNotifier()
         self.listener = TelegramListener(self)
-        self.memory = {}
         self.start_time = time.time()
-        self.cycles_run = 0
-        self.error_count = 0
-
-    def get_recent_logs(self, n=15): return "\n".join(list(log_buffer)[-n:])
-    def get_performance_metrics(self): return {"uptime": int(time.time()-self.start_time), "cycles": self.cycles_run}
-
-    def is_trading_hours(self):
-        current_hour = datetime.now(timezone.utc).hour
-        # 07:00 UTC to 22:00 UTC
-        if 7 <= current_hour < 22: return True
-        return False
-
-    def manage_positions(self):
-        open_trades = self.broker.get_open_positions()
-        for trade in open_trades:
-            symbol = trade.symbol
-            ticket = trade.ticket
-            entry = trade.price_open
-            curr = mt5.symbol_info_tick(symbol).bid if trade.type == 0 else mt5.symbol_info_tick(symbol).ask
-            profit_points = curr - entry if trade.type == 0 else entry - curr
-            sl_dist = abs(entry - trade.sl) if trade.sl > 0 else 0
-            
-            if sl_dist > 0:
-                r = profit_points / sl_dist
-                is_at_be = (trade.sl >= entry) if trade.type == 0 else (trade.sl <= entry)
-                if r >= 1.2 and not is_at_be:
-                     self.broker.modify_position(ticket, sl=entry, tp=trade.tp)
-                     self.notifier.send(f"🛡️ {symbol} -> Breakeven (R={r:.2f})")
-                if r >= 1.0 and "Partial" not in trade.comment:
-                    vol = round(trade.volume * 0.4, 2)
-                    if vol >= 0.01:
-                        self.broker.close_partial(ticket, vol)
-                        self.notifier.send(f"💵 {symbol} Partial Taken")
 
     def run_cycle(self):
-        self.cycles_run += 1
-        try:
-            self.manage_positions()
-        except Exception as e:
-            logger.error(f"Manager Error: {e}")
-
-        if not self.is_trading_hours():
-            logger.info("💤 Asian Session - Monitoring Only")
+        self.session.update_session_status()
+        context = self.session.get_context()
+        
+        if context['session_status'] == "CLOSED":
+            logger.info("💤 Market Closed. Session Manager Asleep.")
             return
 
         if self.paused: return
 
         for symbol in settings.symbol_list:
-            logger.info(f"Scanning {symbol}...")
+            logger.info(f"Analyzing {symbol}...")
+            
             try:
                 data = self.broker.get_multi_timeframe_data(symbol)
                 if not data: continue
                 
-                live = self.broker.get_live_metrics(symbol)
-                
                 # Check Spread
-                spread = live.get('spread_pips', 100)
-                max_spread = 4.5 if "XAU" in symbol or "GOLD" in symbol else 2.5
-                if spread > max_spread:
-                    logger.info(f"Skipping {symbol}: Spread {spread} > {max_spread}")
+                live = self.broker.get_live_metrics(symbol)
+                spread_limit = 4.5 if "XAU" in symbol else 2.5
+                if live.get('spread_pips', 100) > spread_limit:
+                    logger.info(f"Skipping {symbol}: Spread High")
                     continue
 
-                # Pass Symbol to Analyzer for Volatility Scaling
-                market_metrics = self.analyzer.calculate_regime_metrics(data, symbol)
+                # 1. Get Probabilistic Alpha (The Fuzzy Logic)
+                alpha_packet = self.alpha.get_market_state(data)
+                logger.info(f"Alpha Score: {alpha_packet['final_alpha_score']} ({alpha_packet['status']})")
                 
+                # 2. Gatekeeper: Only bother AI if Alpha is significant
+                if alpha_packet['final_alpha_score'] < 0.45:
+                    logger.info(f"{symbol} Low Alpha ({alpha_packet['final_alpha_score']}). Skipping AI.")
+                    continue
+
+                # 3. Account Data
                 acct = self.broker.get_account_info()
                 raw_trades = self.broker.get_open_positions(symbol)
-                acct['open_trades_details'] = [{"ticket": t.ticket, "profit": t.profit, "type": t.type} for t in raw_trades]
-                acct['open_trades_count'] = len(raw_trades)
+                acct['open_trades_details'] = [{"ticket": t.ticket, "profit": t.profit} for t in raw_trades]
+
+                # 4. AI Decision
+                decision = self.brain.analyze_market(alpha_packet, acct, previous_context=context)
                 
-                mem = self.memory.get(symbol, {})
-                decision = self.brain.analyze_market(market_metrics, acct, previous_context=mem)
-                self.memory[symbol] = {"plan": decision.get('plan'), "reasoning": decision.get('reasoning')}
-                
+                # 5. Execute
                 if decision['action'] in ["BUY", "SELL"]:
-                    # Use the DYNAMIC risk percentage calculated by Math Engine
-                    recommended_risk = market_metrics['risk_data']['dynamic_risk_pct']
+                    # Bias Check
+                    if decision['action'] == "BUY" and context['locked_bias'] == "BEARISH":
+                        logger.warning(f"BLOCKED: AI tried to BUY against BEARISH session bias.")
+                        continue
+                    if decision['action'] == "SELL" and context['locked_bias'] == "BULLISH":
+                        logger.warning(f"BLOCKED: AI tried to SELL against BULLISH session bias.")
+                        continue
                     
-                    msg = f"🚀 **{symbol} CALL**\nAction: {decision['action']}\nRisk: {recommended_risk}% (Vol-Scaled)\nReason: {decision.get('reasoning')}"
-                    self.notifier.send(msg)
-                    self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], recommended_risk)
-                else:
-                    logger.info(f"{symbol} HOLD: {decision.get('reasoning')}")
+                    self.broker.execute_trade(decision['action'], symbol, decision['stop_loss'], decision['take_profit'], decision.get('risk_percentage', 0.5))
+                    self.notifier.send(f"🚀 {symbol} {decision['action']} | Alpha: {alpha_packet['final_alpha_score']}")
 
             except Exception as e:
-                if "429" in str(e):
-                    logger.warning("⚠️ API Quota. Cooling 60s...")
-                    time.sleep(60)
-                else:
-                    logger.error(f"Analysis Error: {e}")
+                logger.error(f"Cycle Error: {e}")
+                time.sleep(5)
 
     def start(self):
         if not self.broker.connect():
-            self.notifier.send("🚨 Broker Connect Fail")
             sys.exit(1)
-        self.notifier.send(f"✅ **QuantBot V6.0 Live**\nVol-Scaled Risk Active")
+        self.notifier.send("✅ **QuantBot V6.0 Live**\nEngine: Probabilistic Alpha")
         self.listener.start()
-        
         while self.running:
-            try:
-                self.run_cycle()
-                logger.info("Sleeping for 15 minutes...")
-                time.sleep(900) 
-            except Exception as e:
-                logger.error(f"Loop Error: {e}")
-                time.sleep(60)
+            self.run_cycle()
+            time.sleep(900) # 15 Mins
 
     def shutdown(self, signum, frame):
-        self.notifier.send("🛑 Bot Shutdown")
         self.running = False
         sys.exit(0)
 
 if __name__ == "__main__":
+    import signal
     bot = TradingBot()
     signal.signal(signal.SIGTERM, bot.shutdown)
     signal.signal(signal.SIGINT, bot.shutdown)

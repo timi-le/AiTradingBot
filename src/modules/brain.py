@@ -8,75 +8,62 @@ logger = logging.getLogger(__name__)
 class GeminiBrain:
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY.get_secret_value())
-        
-        # UPGRADE: Switched to 'gemini-2.5-pro'
-        # This is the "Smartest" stable model available. 
-        # REQUIRES: Paid billing enabled in Google Cloud Console.
-        # It has better reasoning for "Liquidity Sweeps" than Flash.
-        self.model_name = 'gemini-2.5-pro'
-        
+        self.model_name = 'gemini-flash-latest'
         self.model = genai.GenerativeModel(
             model_name=self.model_name,
             generation_config={"response_mime_type": "application/json"}
         )
-        
-        # Self-Check: Verify model exists, otherwise list available ones
-        try:
-            # We don't make a call yet, but if the init failed hard earlier, we catch it here.
-            # Some SDK versions validate immediately.
-            pass
-        except Exception as e:
-            logger.error(f"Model Init Error: {e}")
-
         try:
             with open("strategy.xml", "r") as f:
                 self.strategy_xml = f.read()
-        except FileNotFoundError:
+        except:
             self.strategy_xml = "Error: Logic file missing."
 
-    def log_available_models(self):
-        """Helper to debug 404 errors by listing what IS available."""
-        try:
-            logger.info("--- LISTING AVAILABLE MODELS ---")
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    logger.info(f"Available: {m.name}")
-            logger.info("--------------------------------")
-        except Exception as e:
-            logger.error(f"Could not list models: {e}")
+    def analyze_market(self, alpha_packet: dict, account_data: dict, previous_context: dict = None) -> dict:
+        
+        session_instructions = "None"
+        if previous_context:
+            session_instructions = f"""
+            *** SESSION MANAGER ORDERS ***
+            - LOCKED BIAS: {previous_context.get('locked_bias')}
+            - INSTRUCTION: {previous_context.get('instruction')}
+            """
 
-    def analyze_market(self, market_data: dict, account_data: dict, previous_context: dict = None) -> dict:
-        
-        open_trades_context = account_data.get('open_trades_details', [])
-        
         prompt = f"""
-        Act as the 'GeminiPropChallengeAssistant'.
+        Act as a Quant Trader analyzing Probabilistic Alpha.
         
-        --- XML CONSTITUTION ---
+        {session_instructions}
+
+        --- ALPHA DATA PACKET (FUZZY LOGIC) ---
+        Total Alpha Score: {alpha_packet['final_alpha_score']} / 1.0
+        Status: {alpha_packet['status']}
+        
+        METRIC BREAKDOWN:
+        - Structure (35%): {alpha_packet['m5_metrics']['breakdown']['structure']} (Type: {alpha_packet['m5_metrics']['breakdown']['structure_type']})
+        - Reversion (30%): {alpha_packet['m5_metrics']['breakdown']['reversion']}
+        - Volatility (20%): {alpha_packet['m5_metrics']['breakdown']['volatility']}
+        - Momentum (15%): {alpha_packet['m5_metrics']['breakdown']['momentum']}
+
+        --- ACCOUNT ---
+        {json.dumps(account_data, indent=2)}
+
+        --- STRATEGY RULES ---
         {self.strategy_xml}
 
-        ## CURRENT MARKET EVIDENCE (JSON):
-        {json.dumps(market_data, indent=2)}
-        
-        ## ACCOUNT & TRADES:
-        {json.dumps(account_data, indent=2)}
-        "Open Trades Details": {json.dumps(open_trades_context, default=str)}
+        DECISION LOGIC:
+        1. High Structure Score (>0.8) on SUPPORT_LOW = Potential BUY (Sweep).
+        2. High Structure Score (>0.8) on RESISTANCE_HIGH = Potential SELL (Sweep).
+        3. High Reversion Score (>0.7) = Price extended, look for mean reversion.
+        4. MUST OBEY SESSION BIAS.
 
-        ## CRITICAL DIRECTION RULE:
-        - If 'daily_bias' is BULLISH, you may ONLY 'BUY' or 'HOLD'. DO NOT SELL.
-        - If 'daily_bias' is BEARISH, you may ONLY 'SELL' or 'HOLD'. DO NOT BUY.
-        - IGNORE Overbought/Oversold indicators if they conflict with the Daily Bias. Trend is King.
-
-        ## OUTPUT DECISION (JSON):
+        OUTPUT JSON:
         {{
             "decision": {{
                 "action": "BUY" | "SELL" | "HOLD",
-                "management_action": "NONE" | "CLOSE_ALL_XAUUSD" | "CLOSE_ALL_GBPUSD",
-                "risk_percentage": 0.0,
+                "risk_percentage": 0.5,
                 "stop_loss": 0.0,
                 "take_profit": 0.0,
-                "plan": "Short plan",
-                "reasoning": "Reasoning"
+                "reasoning": "Alpha Score 0.85 driven by Structure Sweep..."
             }}
         }}
         """
@@ -84,11 +71,5 @@ class GeminiBrain:
             response = self.model.generate_content(prompt)
             return json.loads(response.text)['decision']
         except Exception as e:
-            # If we get a 404 or 400 error, list the models to help debug
-            if "404" in str(e) or "not found" in str(e).lower():
-                logger.error(f"Brain Error: Model {self.model_name} not found. checking available models...")
-                self.log_available_models()
-            else:
-                logger.error(f"Brain Error: {e}")
-            
-            return {"action": "HOLD", "management_action": "NONE", "reasoning": "AI Error"}
+            logger.error(f"Brain Error: {e}")
+            return {"action": "HOLD", "reasoning": "AI Error"}

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <GeminiPropChallengeAssistant>
   <Meta>
-    <Version>6.0-VolScaled-WalkFwd</Version>
-    <Objective>Pass Prop Challenge via volatility-scaled scalp & trend-breakout system with liquidity-sweep detection.</Objective>
+    <Version>6.2-Context-Aware</Version>
+    <Objective>Pass Prop Challenge using Weighted Probabilistic Alpha and Dynamic Confidence Scaling.</Objective>
     <Pairs>GBPUSD, XAUUSD</Pairs>
     <Constraints>
       <MaxDailyDrawdownPct>3.8</MaxDailyDrawdownPct>
@@ -11,40 +11,88 @@
     </Constraints>
   </Meta>
 
-  <EngineSettings>
-    <Execution>
-      <MaxSlippagePct>0.02</MaxSlippagePct>
-      <UseLimitOnRetest>true</UseLimitOnRetest>
-    </Execution>
-    <DataWindowSec>900</DataWindowSec>
-  </EngineSettings>
-
   <AI_Reasoning_Instructions>
-    <LiquiditySweepDetection>
-      <Rule>
-        IF wick_length >= 1.5 * ATR(14)
-        AND close reverses into candle body
-        AND volume >= 2.0 * avg_volume(50)
-        THEN -> HighProbabilitySweep (Weight 0.95)
-      </Rule>
-    </LiquiditySweepDetection>
+    <AlphaInterpretation>
+      <!-- The Decoder Ring for Python's Math Scores -->
+      <StructureScore weight="35%">
+        <Meaning>Proximity to Liquidity (Swings/Support/Resistance)</Meaning>
+        <Thresholds>
+          <Score range="0.8-1.0">CRITICAL: Price is sweeping a key level (Stop Hunt). High Prob Reversal.</Score>
+          <Score range="0.5-0.79">WARNING: Price is testing a level.</Score>
+          <Score range="0.0-0.49">NOISE: Mid-range. Ignore.</Score>
+        </Thresholds>
+      </StructureScore>
 
-    <FakeoutDetection>
-      <BearishTrap>IF high > recent_high AND close &lt; recent_high AND upper_wick > 0.6 -> SellSignal</BearishTrap>
-      <BullishTrap>IF low &lt; recent_low AND close > recent_low AND lower_wick > 0.6 -> BuySignal</BullishTrap>
-    </FakeoutDetection>
+      <ReversionScore weight="30%">
+        <Meaning>Elasticity (Distance from Mean)</Meaning>
+        <Thresholds>
+          <Score range="0.8-1.0">EXTREME: Rubber band stretched. Snap-back imminent.</Score>
+          <Score range="0.0-0.79">NORMAL: Room to move.</Score>
+        </Thresholds>
+      </ReversionScore>
+
+      <VolatilityScore weight="20%">
+        <Meaning>Market Heartbeat</Meaning>
+        <Thresholds>
+          <Score range="0.0-0.3">DEAD: Spread > Opportunity. Stay out.</Score>
+          <Score range="0.31-1.0">ALIVE: Trade enabled.</Score>
+        </Thresholds>
+      </VolatilityScore>
+
+      <MomentumScore weight="15%">
+        <Meaning>Trend Velocity</Meaning>
+        <Thresholds>
+          <Score range="0.0-0.2">CHOP: No clear direction.</Score>
+          <Score range="0.8-1.0">VELOCITY: Fast move. Do not fade unless StructureScore is 1.0.</Score>
+        </Thresholds>
+      </MomentumScore>
+    </AlphaInterpretation>
+
+    <SessionContext>
+      <!-- Time-of-Day Personality for the AI -->
+      <London>
+        <Characteristics>High Liquidity, "Judas Swings" (False moves), Breakouts.</Characteristics>
+        <Strategy>Prioritize StructureScore > 0.9 (Sweeps) in the first 2 hours.</Strategy>
+      </London>
+      <NewYork>
+        <Characteristics>Trend Continuation, High Volume, News Reversals.</Characteristics>
+        <Strategy>Prioritize MomentumScore > 0.8. Follow the flow.</Strategy>
+      </NewYork>
+    </SessionContext>
+
+    <ConfidenceTiers>
+      <!-- Dynamic Risk Scaling Instructions -->
+      <Tier level="GRADE_A">
+        <Condition>Total Alpha > 0.8 AND StructureScore > 0.85</Condition>
+        <Action>Execute Aggressively. Risk: 0.5%.</Action>
+      </Tier>
+      <Tier level="GRADE_B">
+        <Condition>Total Alpha > 0.6 AND MomentumScore > 0.7</Condition>
+        <Action>Execute Cautiously. Risk: 0.25%.</Action>
+      </Tier>
+      <Tier level="GRADE_C">
+        <Condition>Total Alpha &lt; 0.6</Condition>
+        <Action>HOLD. Not enough edge.</Action>
+      </Tier>
+    </ConfidenceTiers>
+
+    <DecisionMatrix>
+      <Setup type="LiquiditySweep">
+        <Condition>StructureScore > 0.85 AND StructureType == 'SUPPORT_LOW'</Condition>
+        <Action>BUY (Expect Reversal up)</Action>
+      </Setup>
+      
+      <Setup type="LiquiditySweep">
+        <Condition>StructureScore > 0.85 AND StructureType == 'RESISTANCE_HIGH'</Condition>
+        <Action>SELL (Expect Reversal down)</Action>
+      </Setup>
+      
+      <Setup type="TrendPullback">
+        <Condition>MomentumScore > 0.7 AND ReversionScore &lt; 0.4</Condition>
+        <Action>JOIN TREND (Price is moving but not over-extended)</Action>
+      </Setup>
+    </DecisionMatrix>
   </AI_Reasoning_Instructions>
-
-  <MarketRegimes>
-    <Regime type="TRENDING">
-      <Condition>ADX(14) >= 25 AND (EMA50 > EMA200 OR EMA50 &lt; EMA200)</Condition>
-      <Strategy>BreakoutRetest, TrendScalp</Strategy>
-    </Regime>
-    <Regime type="RANGING">
-      <Condition>ADX(14) &lt; 20 AND Price_Inside_Donchian(20)</Condition>
-      <Strategy>FadeSupportResistance, RangeScalp</Strategy>
-    </Regime>
-  </MarketRegimes>
 
   <EntryRules>
     <SpreadLimit>
@@ -52,28 +100,12 @@
       <Gold_XAU>0.30% of ATR</Gold_XAU>
     </SpreadLimit>
 
-    <PriceAction>
-      <Pattern name="Pinbar">wick >= 0.66 body</Pattern>
-      <Pattern name="Engulfing">body > prev_body and direction matches trend</Pattern>
-    </PriceAction>
-
-    <ScalpSetup timeframe="M5">
-      <Buy>TrendUp (EMA50>200) + Bounce EMA50 + BullishPinbar/Sweep</Buy>
-      <Sell>TrendDown (EMA50&lt;200) + Reject EMA50 + BearishPinbar/Sweep</Sell>
-    </ScalpSetup>
-
-    <BreakoutSetup timeframe="H1">
-      <Buy>Close > SwingHigh + Retest + BullishPA + VolConfirm</Buy>
-      <Sell>Close &lt; SwingLow + Retest + BearishPA + VolConfirm</Sell>
-    </BreakoutSetup>
+    <RiskManagement>
+      <BaseRiskPerTradePct>0.50</BaseRiskPerTradePct>
+      <StopLoss>
+        <Rule>If StructureScore is High: Place SL beyond the Sweep Wick (Tight).</Rule>
+        <Rule>If MomentumScore is High: Place SL below EMA50 (Wide).</Rule>
+      </StopLoss>
+    </RiskManagement>
   </EntryRules>
-
-  <VolatilityScaling>
-    <BaseRiskPerTradePct>0.50</BaseRiskPerTradePct>
-    <RefATR>
-      <GBPUSD>0.0080</GBPUSD> <!-- 80 pips -->
-      <XAUUSD>4.50</XAUUSD>   <!-- 450 ticks/$4.50 -->
-    </RefATR>
-    <Formula>risk_pct = BaseRisk * clamp(RefATR / current_ATR, 0.5, 2.0)</Formula>
-  </VolatilityScaling>
 </GeminiPropChallengeAssistant>
