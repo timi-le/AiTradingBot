@@ -56,17 +56,17 @@ class TelegramListener:
 
         if text == "/help" or text == "/start":
             msg = (
-                "🕹️ **QUANT COMMANDER V6**\n\n"
-                "🔍 **Insight**\n"
+                " **QUANT COMMANDER V6**\n\n"
+                " **Insight**\n"
                 "/status - Session Bias & Market Hours\n"
                 "/alpha - Live Probabilistic Score\n"
                 "/positions - Open Trades & PnL\n"
                 "/balance - Equity Health\n\n"
-                "⚙️ **Control**\n"
+                " **Control**\n"
                 "/pause - Suspend Trading\n"
                 "/resume - Resume Trading\n"
-                "/reset - 🔄 Reset Session Bias\n"
-                "/test - 🧪 Connectivity Test\n"
+                "/reset -  Reset Session Bias\n"
+                "/test -  Connectivity Test\n"
                 "/logs - View Recent Logs"
             )
             self.bot.notifier.send(msg)
@@ -82,7 +82,7 @@ class TelegramListener:
                 f"Market: {mkt_status}\n"
                 f"Bot State: {'▶️ RUNNING' if not self.bot.paused else '⏸️ PAUSED'}\n"
                 f"-------------------\n"
-                f"🧠 **Session Manager**\n"
+                f" **Session Manager**\n"
                 f"Bias: {ctx.get('locked_bias', 'NEUTRAL')}\n"
                 f"Mode: {ctx.get('session_status', 'WAITING')}"
             )
@@ -106,13 +106,13 @@ class TelegramListener:
                 bd = state['m5_metrics']['breakdown']
                 
                 msg = (
-                    f"📊 **{symbol} Alpha Scan**\n"
+                    f" **{symbol} Alpha Scan**\n"
                     f"Score: **{score}/1.0** ({state['status']})\n"
                     f"-------------------\n"
-                    f"🏗️ Structure: {bd['structure']} ({bd['structure_type']})\n"
-                    f"↩️ Reversion: {bd['reversion']}\n"
-                    f"🌊 Volatility: {bd['volatility']}\n"
-                    f"🚀 Momentum: {bd['momentum']}"
+                    f" Structure: {bd['structure']} ({bd['structure_type']})\n"
+                    f"↩ Reversion: {bd['reversion']}\n"
+                    f" Volatility: {bd['volatility']}\n"
+                    f" Momentum: {bd['momentum']}"
                 )
                 self.bot.notifier.send(msg)
 
@@ -142,10 +142,10 @@ class TelegramListener:
 
         elif text == "/logs":
             logs = self.bot.get_recent_logs(n=8)
-            self.bot.notifier.send(f"📜 **System Logs**\n```\n{logs}\n```")
+            self.bot.notifier.send(f" **System Logs**\n```\n{logs}\n```")
 
         elif text == "/test":
-            self.bot.notifier.send("🧪 Testing Broker Connection...")
+            self.bot.notifier.send(" Testing Broker Connection...")
             sym = settings.symbol_list[0]
             if self.bot.broker.verify_execution_capability(sym):
                 self.bot.notifier.send("✅ Broker OK\n✅ Trading Permissions OK")
@@ -154,8 +154,8 @@ class TelegramListener:
 
         elif text == "/pause":
             self.bot.paused = True
-            self.bot.notifier.send("⏸️ **System PAUSED**")
+            self.bot.notifier.send("**System PAUSED**")
 
         elif text == "/resume":
             self.bot.paused = False
-            self.bot.notifier.send("▶️ **System RESUMED**")
+            self.bot.notifier.send("**System RESUMED**")

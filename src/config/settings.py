@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
     # Strategy Params
-    # CHANGED: Supports comma-separated list (e.g., "XAUUSD, GBPUSD")
-    SYMBOLS: str = "XAUUSD" 
+    # ADDED: USDJPY to the list
+    SYMBOLS: str = "XAUUSD, GBPUSD, USDJPY" 
     TIMEFRAME: str = "H4"
     MAX_RISK_PER_TRADE: float = Field(0.01, ge=0.001, le=0.05)
 
@@ -19,15 +19,13 @@ class Settings(BaseSettings):
     MT5_PASSWORD: SecretStr
     MT5_SERVER: str
 
-    # NEW: Telegram Notification Keys (Optional but recommended)
-    # We default to empty string so the bot doesn't crash if you haven't set them yet
+    # Telegram Notification Keys
     TELEGRAM_BOT_TOKEN: SecretStr = SecretStr("")
     TELEGRAM_CHAT_ID: str = ""
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        # This tells Pydantic to ignore extra keys in .env (like system variables)
         extra = "ignore" 
 
     # Helper to convert "XAUUSD, GBPUSD" string into a Python List
